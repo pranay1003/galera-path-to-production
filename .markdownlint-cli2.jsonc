@@ -1,0 +1,13 @@
+{
+  // Relax rules that fight normal technical docs; keep the rest of the defaults.
+  "config": {
+    "default": true,
+    "MD013": false, // line length — prose and tables run long
+    "MD033": false, // inline HTML — used in diagrams/tables
+    "MD041": false, // file need not start with a top-level heading
+    "MD060": false, // table pipe-spacing style — cosmetic; tables render fine
+    "MD025": false  // DESIGN.md uses multiple H1s (title + Part 1 / Part 2)
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["notes/**", ".venv/**", "node_modules/**", "CLAUDE.md"]
+}

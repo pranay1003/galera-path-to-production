@@ -1,0 +1,182 @@
+---
+# Cluster verification (DESIGN §4), as Ansible asserts. Run against a live cluster.
+#   Gate (safe):     ansible-playbook verify.yml
+#   Include failover: ansible-playbook verify.yml -e run_failover=true   (DISRUPTIVE)
+
+- name: Cluster health on every node
+  hosts: galera
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read wsrep status values
+      ansible.builtin.command: >-
+        mysql --socket=/run/mysqld/mysqld.sock -N -B
+        -e "SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='{{ item }}'"
+      loop:
+        - wsrep_cluster_size
+        - wsrep_cluster_status
+        - wsrep_local_state_comment
+      register: galera_status
+      changed_when: false
+
+    - name: Assert this node is a Synced primary in a full cluster
+      ansible.builtin.assert:
+        that:
+          - galera_status.results[0].stdout == (groups['galera'] | length | string)
+          - galera_status.results[1].stdout == 'Primary'
+          - galera_status.results[2].stdout == 'Synced'
+        fail_msg: >-
+          {{ inventory_hostname }} unhealthy:
+          size={{ galera_status.results[0].stdout }}
+          status={{ galera_status.results[1].stdout }}
+          state={{ galera_status.results[2].stdout }}
+        success_msg: "{{ inventory_hostname }} is Synced in a {{ galera_status.results[0].stdout }}-node primary cluster"
+
+- name: Provision a throwaway test user and database (bootstrap node; replicates)
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Generate a random password for this run
+      ansible.builtin.set_fact:
+        verify_db_password: "{{ lookup('ansible.builtin.password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+      no_log: true
+
+    - name: Create ci_test database and ci_tester user
+      ansible.builtin.command:
+        argv:
+          - mysql
+          - --socket=/run/mysqld/mysqld.sock
+          - -e
+          - >-
+            CREATE DATABASE IF NOT EXISTS ci_test;
+            CREATE OR REPLACE USER 'ci_tester'@'%' IDENTIFIED BY '{{ verify_db_password }}';
+            GRANT ALL PRIVILEGES ON ci_test.* TO 'ci_tester'@'%';
+            FLUSH PRIVILEGES;
+      changed_when: true
+      no_log: true
+
+- name: Write through HAProxy and verify replication (and optional failover)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    haproxy_ip: "{{ hostvars[groups['haproxy'][0]].ansible_host }}"
+    db_password: "{{ hostvars[groups['galera'][0]].verify_db_password }}"
+    bootstrap_node: "{{ groups['galera'][0] }}"
+  tasks:
+    - name: Make a unique token for this run
+      ansible.builtin.set_fact:
+        token: "{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+
+    - name: Insert the token through HAProxy
+      ansible.mysql.mysql_query:
+        login_host: "{{ haproxy_ip }}"
+        login_user: ci_tester
+        login_password: "{{ db_password }}"
+        login_db: ci_test
+        query:
+          - "CREATE TABLE IF NOT EXISTS repl_check (id INT PRIMARY KEY AUTO_INCREMENT, token VARCHAR(64))"
+          - "INSERT INTO repl_check (token) VALUES ('{{ token }}')"
+      no_log: true
+
+    - name: Read the token back from every node directly
+      ansible.builtin.command: >-
+        mysql --socket=/run/mysqld/mysqld.sock -N -B
+        -e "SELECT token FROM ci_test.repl_check WHERE token='{{ token }}'"
+      become: true
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['galera'] }}"
+      register: replica_reads
+      changed_when: false
+
+    - name: Assert the row replicated to every node
+      ansible.builtin.assert:
+        that: item.stdout == token
+        fail_msg: "token missing on {{ item.item }}"
+      loop: "{{ replica_reads.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # --- Optional failover test (DISRUPTIVE): run with -e run_failover=true ---
+    - name: Failover
+      when: run_failover | default(false) | bool
+      block:
+        - name: Find the node HAProxy is writing to
+          ansible.mysql.mysql_query:
+            login_host: "{{ haproxy_ip }}"
+            login_user: ci_tester
+            login_password: "{{ db_password }}"
+            login_db: ci_test
+            query: "SELECT @@wsrep_node_name AS n"
+          register: active_q
+          no_log: true
+
+        - name: Identify active and surviving nodes
+          ansible.builtin.set_fact:
+            active_node: "{{ active_q.query_result[0][0].n }}"
+            survivor_node: "{{ (groups['galera'] | difference([active_q.query_result[0][0].n]))[0] }}"
+
+        - name: Stop MariaDB on the active node
+          ansible.builtin.service:
+            name: mariadb
+            state: stopped
+          become: true
+          delegate_to: "{{ active_node | default(bootstrap_node) }}"
+
+        - name: Write must recover through HAProxy (failover)
+          ansible.mysql.mysql_query:
+            login_host: "{{ haproxy_ip }}"
+            login_user: ci_tester
+            login_password: "{{ db_password }}"
+            login_db: ci_test
+            query: "INSERT INTO repl_check (token) VALUES ('{{ token }}-failover')"
+          register: failover_write
+          until: failover_write is succeeded
+          retries: 15
+          delay: 2
+          no_log: true
+
+        - name: The failover write is present on a surviving node
+          ansible.builtin.command: >-
+            mysql --socket=/run/mysqld/mysqld.sock -N -B
+            -e "SELECT token FROM ci_test.repl_check WHERE token='{{ token }}-failover'"
+          become: true
+          delegate_to: "{{ survivor_node | default(bootstrap_node) }}"
+          register: failover_read
+          changed_when: false
+          failed_when: failover_read.stdout != (token ~ '-failover')
+      always:
+        - name: Bring the stopped node back
+          ansible.builtin.service:
+            name: mariadb
+            state: started
+          become: true
+          delegate_to: "{{ active_node | default(bootstrap_node) }}"
+          when: run_failover | default(false) | bool
+
+        - name: Wait for the recovered node to resync
+          ansible.builtin.command: >-
+            mysql --socket=/run/mysqld/mysqld.sock -N -B
+            -e "SHOW STATUS LIKE 'wsrep_local_state_comment'"
+          become: true
+          delegate_to: "{{ active_node | default(bootstrap_node) }}"
+          register: resync
+          until: "'Synced' in resync.stdout"
+          retries: 40
+          delay: 3
+          changed_when: false
+          when: run_failover | default(false) | bool
+
+- name: Clean up the throwaway test user and database
+  hosts: galera[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Drop ci_tester and ci_test
+      ansible.builtin.command:
+        argv:
+          - mysql
+          - --socket=/run/mysqld/mysqld.sock
+          - -e
+          - "DROP USER IF EXISTS 'ci_tester'@'%'; DROP DATABASE IF EXISTS ci_test;"
+      changed_when: true

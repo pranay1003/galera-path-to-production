@@ -1,0 +1,22 @@
+---
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    level: warning
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false # allow 'yes'/'no' only where Ansible needs them
+  comments:
+    min-spaces-from-content: 1 # Ansible/Jinja often use '# ...' close to content
+  comments-indentation: disable
+  braces:
+    max-spaces-inside: 1 # Jinja '{{ x }}' spacing
+  octal-values: # align with ansible-lint's requirements
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+
+ignore: |
+  .venv/
+  .terraform/
