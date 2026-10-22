@@ -2,5 +2,7 @@ ansible==14.5.0
 ansible-core==2.21.5
 ansible-lint==26.10.1
 PyMySQL==1.2.3
-pytest==9.1.1
 yamllint==1.38.0
+checkov==3.3.30
+# Not pip: markdownlint-cli2 (node) and gitleaks (binary) — installed in CI separately.
+# PyMySQL is used by the ansible.mysql modules (roles + verify.yml).

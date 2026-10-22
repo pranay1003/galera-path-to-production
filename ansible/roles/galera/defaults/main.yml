@@ -20,5 +20,5 @@ galera_packages:
   - mariadb-client
   - galera-4 # wsrep provider (libgalera_smm.so)
   - mariadb-backup # mariabackup, used for SST
-  - python3-pymysql # required by the community.mysql modules on the node
+  - python3-pymysql # required by the ansible.mysql modules on the node
   - rsync

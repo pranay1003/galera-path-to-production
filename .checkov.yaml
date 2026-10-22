@@ -1,0 +1,14 @@
+# checkov config. Real hardening (IMDSv2, EBS encryption, EBS-optimized) is in the .tf.
+# The skips below are deliberate design decisions documented in DESIGN.md.
+directory:
+  - terraform
+compact: true
+quiet: true
+skip-check:
+  - CKV_AWS_126 # detailed monitoring: cost; nodes are short-lived
+  - CKV_AWS_130 # public-IP subnets: intentional — public subnets, no NAT (DESIGN cost tradeoff)
+  - CKV_AWS_382 # egress 0.0.0.0/0: nodes need outbound for apt + Galera SST
+  - CKV_AWS_394 # AZ data source pin: we intentionally take the first three AZs
+  - CKV2_AWS_11 # VPC flow logs: observability is a documented stretch goal
+  - CKV2_AWS_12 # default SG lockdown: accepted for scope; a documented next step
+  - CKV2_AWS_41 # IAM role on EC2: none needed yet; SSM access is a next step

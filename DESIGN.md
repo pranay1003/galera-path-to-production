@@ -135,7 +135,7 @@ Separated by Terraform workspace: same code, separate state, separate resource n
 
 ## 1. Repository layout
 
-```
+```text
 galera-path-to-production/
 ├── terraform/
 │   ├── main.tf            # VPC, subnets, security groups, instances
@@ -146,14 +146,12 @@ galera-path-to-production/
 ├── ansible/
 │   ├── ansible.cfg
 │   ├── site.yml           # entry point: full deploy
+│   ├── verify.yml         # cluster verification (assert tasks; -e run_failover=true)
 │   ├── group_vars/all.yml
 │   └── roles/
 │       ├── common/        # packages, time sync, base hardening
 │       ├── galera/        # MariaDB + Galera install, config, bootstrap/join
 │       └── haproxy/       # HAProxy install + active-backup config
-├── tests/
-│   ├── conftest.py        # DB connection fixtures from inventory
-│   └── test_cluster.py
 ├── .github/workflows/
 │   ├── lint.yml           # pull requests
 │   └── deploy.yml         # main: CI cluster gate -> approval -> prod
@@ -166,6 +164,7 @@ galera-path-to-production/
 **Backend:** S3 bucket for state with S3-native locking, created once by hand.
 
 **Resources (`main.tf`):**
+
 - VPC `10.0.0.0/16`; three public subnets, one per AZ; internet gateway; route table.
 - Security groups:
 
@@ -188,6 +187,7 @@ galera-path-to-production/
 ## 3. Ansible
 
 **Entry point — `site.yml`:**
+
 ```yaml
 - hosts: all
   roles: [common]
@@ -202,6 +202,7 @@ galera-path-to-production/
 ```
 
 **Role `galera`:**
+
 - `tasks/main.yml` → install, configure, bootstrap-or-join, wait-for-synced.
 - `templates/galera.cnf.j2` → `wsrep_cluster_address` built from inventory,
   `wsrep_node_address`, `wsrep_sst_method=mariabackup`, `binlog_format=ROW`,
@@ -215,6 +216,7 @@ galera-path-to-production/
 - `defaults/main.yml` → cluster name, SST user, timeouts.
 
 **Role `haproxy`:**
+
 - `templates/haproxy.cfg.j2` → frontend on 3306; backend with first Galera node
   active and the rest marked `backup`; health checks every 2s.
 - Validate with `haproxy -c -f` before reload.
@@ -225,15 +227,19 @@ galera-path-to-production/
 **Secrets:** root and SST passwords come from GitHub environment secrets, passed
 as extra vars at runtime. Never written to the repo.
 
-## 4. Tests (`tests/test_cluster.py`, pytest + PyMySQL)
+## 4. Tests (`ansible/verify.yml`, Ansible `assert` tasks)
 
-| Test | Checks |
+Verification is an Ansible playbook so the repo stays one toolchain. The gate run is
+safe; the failover test is opt-in (`-e run_failover=true`) because it stops a node.
+
+| Check | What it asserts |
 |---|---|
-| `test_cluster_size` | `wsrep_cluster_size` = 3 on every node |
-| `test_all_nodes_synced` | Every node reports `Synced` and `Primary` |
-| `test_write_replicates` | Insert a unique row through HAProxy; read it back from each node directly |
-| Idempotency (pipeline step) | Second `ansible-playbook site.yml` run reports `changed=0` |
-| `test_node_failure` (stretch) | Stop the active node; writes via HAProxy still succeed; node rejoins |
+| cluster health | `wsrep_cluster_size` = 3, `Primary`, `Synced` on every node |
+| write replicates | Insert a unique token through HAProxy; read it back from each node directly |
+| idempotency (pipeline step) | Second `ansible-playbook site.yml` run reports `changed=0` |
+| failover (opt-in, disruptive) | Stop the active node; writes via HAProxy recover; node rejoins and resyncs |
+
+Run: `ansible-playbook verify.yml` (gate) / `ansible-playbook verify.yml -e run_failover=true` (with failover).
 
 ## 5. Pipeline detail (`deploy.yml`)
 

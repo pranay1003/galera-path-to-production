@@ -1,0 +1,10 @@
+# gitleaks: use the built-in rules, but don't scan vendored/generated trees.
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+  '''\.venv/''',
+  '''\.terraform/''',
+  '''\.git/''',
+]
