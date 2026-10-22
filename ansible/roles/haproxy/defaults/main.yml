@@ -1,0 +1,4 @@
+---
+# haproxy role defaults.
+haproxy_frontend_port: 3306
+haproxy_check_interval_ms: 2000 # health-check every 2s (DESIGN §3)

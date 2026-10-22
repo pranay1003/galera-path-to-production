@@ -1,0 +1,22 @@
+---
+# common role — base configuration for every host (DESIGN §2 LLD).
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600 # skip if refreshed in the last hour (keeps re-runs fast)
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ common_timezone }}"
+
+- name: Ensure time sync is running
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true

@@ -1,0 +1,26 @@
+# Managed by Ansible (haproxy role). Do not edit by hand.
+global
+    log /dev/log local0
+    maxconn 2048
+    daemon
+
+defaults
+    mode    tcp
+    log     global
+    option  tcplog
+    timeout connect 5s
+    timeout client  600s
+    timeout server  600s
+
+frontend galera_fe
+    bind *:{{ haproxy_frontend_port }}
+    default_backend galera_be
+
+backend galera_be
+    # MySQL-level check (MVP): confirms the node accepts connections, not that it's Synced.
+    option mysql-check user {{ haproxy_check_user }}
+    # Active-backup: first node takes all writes; the rest only on failover (one writer -> no
+    # Galera certification conflicts). Default (no 'allbackups') uses one backup at a time.
+{% for host in groups['galera'] %}
+    server {{ host }} {{ hostvars[host].ansible_host }}:3306 check inter {{ haproxy_check_interval_ms }} rise 2 fall 2{{ ' backup' if not loop.first else '' }}
+{% endfor %}

@@ -1,0 +1,3 @@
+---
+# galera role handlers.
+# TODO (your logic): restart MariaDB (respects serial: 1 rolling restart).
