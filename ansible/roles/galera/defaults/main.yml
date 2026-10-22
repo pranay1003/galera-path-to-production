@@ -1,0 +1,24 @@
+---
+# galera role defaults. Secrets (galera_sst_password) come from --extra-vars at runtime.
+galera_cluster_name: galera-ptp
+galera_config_path: /etc/mysql/mariadb.conf.d/60-galera.cnf
+galera_wsrep_provider: /usr/lib/galera/libgalera_smm.so
+galera_mysql_socket: /run/mysqld/mysqld.sock
+
+# SST (full state transfer) credentials. Password is injected at runtime, never stored.
+galera_sst_user: sstuser
+
+# Parallel apply threads on the receiving node.
+galera_slave_threads: 4
+
+# How long to wait for a node to reach 'Synced' after (re)start: retries * delay seconds.
+galera_synced_retries: 60
+galera_synced_delay: 5
+
+galera_packages:
+  - mariadb-server
+  - mariadb-client
+  - galera-4 # wsrep provider (libgalera_smm.so)
+  - mariadb-backup # mariabackup, used for SST
+  - python3-pymysql # required by the community.mysql modules on the node
+  - rsync

@@ -1,0 +1,5 @@
+---
+# common role defaults.
+common_packages:
+  - chrony # time sync — Galera certification ordering is sensitive to clock skew
+common_timezone: UTC

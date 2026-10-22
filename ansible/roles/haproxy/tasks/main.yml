@@ -1,0 +1,23 @@
+---
+# haproxy role (DESIGN §3): active-backup load balancer in front of the Galera cluster.
+
+- name: Install HAProxy
+  ansible.builtin.apt:
+    name: haproxy
+    state: present
+
+- name: Deploy HAProxy configuration
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    validate: haproxy -c -f %s # refuse to write a config that doesn't parse
+  notify: Reload HAProxy
+
+- name: Ensure HAProxy is running and enabled
+  ansible.builtin.service:
+    name: haproxy
+    state: started
+    enabled: true

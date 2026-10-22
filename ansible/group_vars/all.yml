@@ -1,0 +1,5 @@
+---
+# Cluster-wide, non-secret settings. Secrets come from --extra-vars at runtime.
+
+# Shared by the galera role (creates the user) and the haproxy role (uses it for checks).
+haproxy_check_user: haproxy_check

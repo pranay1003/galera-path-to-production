@@ -1,0 +1,23 @@
+---
+# Full deploy. Mirrors DESIGN.md §3 (Ansible entry point).
+# Secrets (DB root / SST passwords) are passed at runtime with --extra-vars, never stored here.
+
+- name: Base configuration on every host
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: MariaDB Galera cluster
+  hosts: galera
+  become: true
+  serial: 1 # one node at a time
+  any_errors_fatal: true # stop the whole run on the first failing node
+  roles:
+    - galera
+
+- name: HAProxy load balancer
+  hosts: haproxy
+  become: true
+  roles:
+    - haproxy

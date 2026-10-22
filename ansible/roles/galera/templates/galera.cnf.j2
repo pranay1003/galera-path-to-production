@@ -1,0 +1,23 @@
+# Managed by Ansible (galera role). Do not edit by hand.
+# Loaded after 50-server.cnf (higher numeric prefix wins on conflicts, e.g. bind-address).
+[mysqld]
+bind-address = 0.0.0.0
+
+# --- Galera / wsrep ---
+wsrep_on                 = ON
+wsrep_provider           = {{ galera_wsrep_provider }}
+wsrep_cluster_name       = {{ galera_cluster_name }}
+# All member private IPs, from the inventory. galera_new_cluster ignores this when bootstrapping.
+wsrep_cluster_address    = gcomm://{{ groups['galera'] | map('extract', hostvars, 'ansible_host') | join(',') }}
+wsrep_node_name          = {{ inventory_hostname }}
+wsrep_node_address       = {{ ansible_host }}
+wsrep_slave_threads      = {{ galera_slave_threads }}
+
+# Required for correct multi-node behaviour.
+binlog_format            = ROW
+default_storage_engine   = InnoDB
+innodb_autoinc_lock_mode = 2
+
+# State transfer via mariabackup (non-blocking donor).
+wsrep_sst_method         = mariabackup
+wsrep_sst_auth           = {{ galera_sst_user }}:{{ galera_sst_password }}
