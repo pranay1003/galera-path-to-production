@@ -65,8 +65,6 @@ jobs:
       - name: Deploy + idempotency + verify
         env:
           ANSIBLE_SST: ${{ secrets.GALERA_SST_PASSWORD }}
-          # instances just booted; let SSH retry while sshd comes up on the galera nodes
-          ANSIBLE_SSH_ARGS: "-o ConnectTimeout=10 -o ConnectionAttempts=30"
         run: |
           eval "$(ssh-agent -s)"
           ssh-add ci_key
@@ -145,7 +143,6 @@ jobs:
       - name: Deploy + verify (production)
         env:
           ANSIBLE_SST: ${{ secrets.GALERA_SST_PASSWORD }}
-          ANSIBLE_SSH_ARGS: "-o ConnectTimeout=10 -o ConnectionAttempts=30"
         run: |
           eval "$(ssh-agent -s)"
           ssh-add prod_key
