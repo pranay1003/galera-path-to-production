@@ -6,7 +6,7 @@ haproxy-1 ansible_host=${haproxy_ip}
 
 [galera]
 %{ for az, ip in galera_private_ips ~}
-galera-${az} ansible_host=${ip} ansible_ssh_common_args='-o ProxyJump=${ssh_user}@${haproxy_ip}'
+galera-${az} ansible_host=${ip} ansible_ssh_common_args='-o ProxyCommand="ssh -W %h:%p -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ${ssh_user}@${haproxy_ip}"'
 %{ endfor ~}
 
 [all:vars]
