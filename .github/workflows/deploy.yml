@@ -128,10 +128,16 @@ jobs:
           cache-dependency-path: requirements.txt
       - run: pip install -r requirements.txt
 
-      - name: Ephemeral SSH key + runner IP
+      - name: Stable SSH key + runner IP
+        # prod is long-lived, so it must reuse one key that stays on the instances across
+        # re-deploys (unlike the CI job, which rebuilds and can use an ephemeral key).
+        env:
+          PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PROD_SSH_PUBLIC_KEY: ${{ vars.PROD_SSH_PUBLIC_KEY }}
         run: |
-          ssh-keygen -t ed25519 -f prod_key -N "" -q
-          echo "TF_VAR_ssh_public_key=$(cat prod_key.pub)" >> "$GITHUB_ENV"
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > prod_key
+          chmod 600 prod_key
+          echo "TF_VAR_ssh_public_key=$PROD_SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
           echo "TF_VAR_allowed_cidr=$(curl -fsS https://checkip.amazonaws.com)/32" >> "$GITHUB_ENV"
 
       - name: Terraform apply (prod workspace)
