@@ -48,6 +48,14 @@ resource "aws_iam_role" "deploy" {
 # Permissions: EC2/VPC (the cluster), the state bucket, and the default EBS KMS key
 # (instances now use encrypted root volumes).
 data "aws_iam_policy_document" "permissions" {
+  # A Terraform deploy role that manages the VPC, subnets, SGs and instances needs broad
+  # EC2, and KMS for the default EBS key. S3 is already scoped to the state bucket, and no
+  # IAM/credential-management actions are granted. Breadth here is intentional and scoped
+  # to what this pipeline builds.
+  #checkov:skip=CKV_AWS_356:ec2:*/kms on "*" is required to manage account-wide EC2/VPC
+  #checkov:skip=CKV_AWS_111:broad write is the deploy role's purpose; S3 scoped to the bucket
+  #checkov:skip=CKV_AWS_109:no IAM permission-management actions are granted
+  #checkov:skip=CKV_AWS_107:no credential-exposure actions are granted
   statement {
     sid       = "Ec2AndVpc"
     effect    = "Allow"
