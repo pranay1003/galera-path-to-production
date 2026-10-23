@@ -5,6 +5,7 @@ name: lint
 on:
   pull_request:
   workflow_dispatch:
+  workflow_call: # so deploy.yml can run the same checks first
 
 permissions:
   contents: read
