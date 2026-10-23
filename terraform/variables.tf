@@ -1,11 +1,12 @@
 # The environment is the Terraform workspace (terraform.workspace), not a variable.
 
 variable "instance_type" {
-  # t2.small = 1 vCPU, 2 GB RAM. Keeps prod + an ephemeral CI cluster (8 instances)
-  # within the account's vCPU quota. (t3.small is 2 vCPU, which doubles the count.)
+  # t3.small (2 vCPU, 2 GB) is free-tier-eligible here. Note: the account's On-Demand
+  # vCPU quota is 8, so only one 4-node cluster runs at a time — prod and an ephemeral
+  # CI cluster cannot coexist without a quota increase.
   description = "EC2 instance type for the Galera and HAProxy nodes."
   type        = string
-  default     = "t2.small"
+  default     = "t3.small"
 }
 
 variable "ssh_public_key" {
