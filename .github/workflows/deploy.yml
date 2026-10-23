@@ -65,9 +65,15 @@ jobs:
       - name: Deploy + idempotency + verify
         env:
           ANSIBLE_SST: ${{ secrets.GALERA_SST_PASSWORD }}
+          # instances just booted; let SSH retry while sshd comes up on the galera nodes
+          ANSIBLE_SSH_ARGS: "-o ConnectTimeout=10 -o ConnectionAttempts=30"
         run: |
           eval "$(ssh-agent -s)"
           ssh-add ci_key
+          # wait for the jump host's sshd before Ansible connects
+          HAP=$(terraform -chdir=terraform output -raw haproxy_public_ip)
+          echo "Waiting for SSH on $HAP ..."
+          for i in $(seq 1 60); do nc -z -w5 "$HAP" 22 && { echo "ssh up"; break; }; sleep 5; done
           cd ansible
           ansible-playbook site.yml -e "galera_sst_password=$ANSIBLE_SST"
           # second run must report no changes
@@ -139,9 +145,13 @@ jobs:
       - name: Deploy + verify (production)
         env:
           ANSIBLE_SST: ${{ secrets.GALERA_SST_PASSWORD }}
+          ANSIBLE_SSH_ARGS: "-o ConnectTimeout=10 -o ConnectionAttempts=30"
         run: |
           eval "$(ssh-agent -s)"
           ssh-add prod_key
+          HAP=$(terraform -chdir=terraform output -raw haproxy_public_ip)
+          echo "Waiting for SSH on $HAP ..."
+          for i in $(seq 1 60); do nc -z -w5 "$HAP" 22 && { echo "ssh up"; break; }; sleep 5; done
           cd ansible
           ansible-playbook site.yml -e "galera_sst_password=$ANSIBLE_SST"
           ansible-playbook verify.yml
