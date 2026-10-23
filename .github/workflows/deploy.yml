@@ -1,0 +1,142 @@
+---
+name: deploy
+
+# Full gate on merge to main (DESIGN §5): lint -> temporary CI cluster (built, tested,
+# always destroyed) -> manual approval -> production.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # assume the AWS role via OIDC
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false # never interrupt an in-flight apply/destroy
+
+env:
+  AWS_REGION: us-east-2
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  ci-cluster:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Ephemeral SSH key + runner IP
+        run: |
+          ssh-keygen -t ed25519 -f ci_key -N "" -q
+          echo "TF_VAR_ssh_public_key=$(cat ci_key.pub)" >> "$GITHUB_ENV"
+          echo "TF_VAR_allowed_cidr=$(curl -fsS https://checkip.amazonaws.com)/32" >> "$GITHUB_ENV"
+
+      - name: Terraform apply (ci workspace)
+        run: |
+          terraform -chdir=terraform init -input=false
+          terraform -chdir=terraform workspace select -or-create ci
+          terraform -chdir=terraform apply -auto-approve -input=false
+
+      - name: Deploy + idempotency + verify
+        env:
+          ANSIBLE_SST: ${{ secrets.GALERA_SST_PASSWORD }}
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-add ci_key
+          cd ansible
+          ansible-playbook site.yml -e "galera_sst_password=$ANSIBLE_SST"
+          # second run must report no changes
+          ansible-playbook site.yml -e "galera_sst_password=$ANSIBLE_SST" | tee idem.log
+          if grep -qE 'changed=[1-9]' idem.log; then echo "NOT idempotent"; exit 1; fi
+          ansible-playbook verify.yml
+
+  ci-teardown:
+    needs: ci-cluster
+    if: always() # tear the CI cluster down pass or fail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+      - name: Terraform destroy (ci workspace)
+        env:
+          TF_VAR_ssh_public_key: "unused-on-destroy"
+          TF_VAR_allowed_cidr: "0.0.0.0/32"
+        run: |
+          terraform -chdir=terraform init -input=false
+          terraform -chdir=terraform workspace select ci
+          terraform -chdir=terraform destroy -auto-approve -input=false
+
+  prod:
+    needs: ci-cluster # only after CI passes
+    runs-on: ubuntu-latest
+    environment: production # requires the approval configured on this environment
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+
+      - name: Ephemeral SSH key + runner IP
+        run: |
+          ssh-keygen -t ed25519 -f prod_key -N "" -q
+          echo "TF_VAR_ssh_public_key=$(cat prod_key.pub)" >> "$GITHUB_ENV"
+          echo "TF_VAR_allowed_cidr=$(curl -fsS https://checkip.amazonaws.com)/32" >> "$GITHUB_ENV"
+
+      - name: Terraform apply (prod workspace)
+        run: |
+          terraform -chdir=terraform init -input=false
+          terraform -chdir=terraform workspace select -or-create prod
+          terraform -chdir=terraform apply -auto-approve -input=false
+
+      - name: Deploy + verify (production)
+        env:
+          ANSIBLE_SST: ${{ secrets.GALERA_SST_PASSWORD }}
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-add prod_key
+          cd ansible
+          ansible-playbook site.yml -e "galera_sst_password=$ANSIBLE_SST"
+          ansible-playbook verify.yml
