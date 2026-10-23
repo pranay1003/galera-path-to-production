@@ -107,7 +107,7 @@ Separated by Terraform workspace: same code, separate state, separate resource n
 | Single HAProxy | Keeps scope achievable | Single point of failure; fix is 2 HAProxies behind an AWS NLB |
 | Public subnets, no NAT gateway | NAT is the most expensive piece for a short-lived project | Nodes have public IPs; security groups allow DB and replication traffic only from inside the cluster |
 | Active-backup writes | Avoids Galera certification conflicts | One node carries all traffic (fine at this scale) |
-| GitHub OIDC to AWS | No long-lived access keys anywhere | Slightly more IAM setup |
+| Access-key secret for CI → AWS (OIDC intended) | The account's SCP blocks creating the OIDC provider | A long-lived secret in GitHub; OIDC via `terraform/bootstrap/` is the next step |
 | Fail-forward over rollback | Database changes rarely roll back cleanly; rolling one node at a time limits blast radius | A bad change needs a fix-forward commit |
 
 ## 8. Operability
@@ -138,11 +138,17 @@ Separated by Terraform workspace: same code, separate state, separate resource n
 ```text
 galera-path-to-production/
 ├── terraform/
-│   ├── main.tf            # VPC, subnets, security groups, instances
+│   ├── main.tf            # data sources (Ubuntu AMI, AZs)
+│   ├── network.tf         # VPC, subnets, IGW, routing
+│   ├── security_groups.tf # haproxy + galera security groups
+│   ├── instances.tf       # key pair, 3 Galera + HAProxy
+│   ├── providers.tf       # AWS provider + default tags
 │   ├── variables.tf
 │   ├── outputs.tf         # IPs used to build the Ansible inventory
 │   ├── versions.tf        # provider pins + S3 backend
-│   └── inventory.tftpl    # template rendered into ansible/inventory.ini
+│   ├── inventory.tf       # renders ansible/inventory.ini
+│   ├── inventory.tftpl    # inventory template
+│   └── bootstrap/         # OIDC provider + deploy role (intended auth; not wired in)
 ├── ansible/
 │   ├── ansible.cfg
 │   ├── site.yml           # entry point: full deploy
@@ -163,26 +169,26 @@ galera-path-to-production/
 
 **Backend:** S3 bucket for state with S3-native locking, created once by hand.
 
-**Resources (`main.tf`):**
+**Resources** (split across `network.tf`, `security_groups.tf`, `instances.tf`):
 
 - VPC `10.0.0.0/16`; three public subnets, one per AZ; internet gateway; route table.
 - Security groups:
 
 | SG | Inbound | From |
 |---|---|---|
-| `haproxy` | 22 | Pipeline runner IP only (added at job start, removed at end) |
-| `haproxy` | 3306 | Pipeline runner IP / your IP |
+| `haproxy` | 22 | `allowed_cidr` (runner IP in CI, your IP locally) |
+| `haproxy` | 3306 | `allowed_cidr` (runner IP in CI, your IP locally) |
 | `galera` | 3306 | `haproxy` SG |
 | `galera` | 4567 (tcp+udp), 4568, 4444 | `galera` SG (replication, IST, SST) |
 | `galera` | 22 | `haproxy` SG (via jump host) |
 
-- Instances: 3 × Galera, 1 × HAProxy. Ubuntu 24.04, small instance types.
-  Tagged with `env` = workspace name.
+- Instances: 3 × Galera, 1 × HAProxy. Ubuntu 24.04, `t3.small`, IMDSv2 and encrypted
+  root volumes. Tagged with `env` = workspace name (via `default_tags`).
 
 **Outputs:** HAProxy public IP, Galera private IPs → rendered into
 `ansible/inventory.ini` via `inventory.tftpl`.
 
-**Variables:** `env`, `instance_type`, `ssh_public_key`, `allowed_cidr`.
+**Variables:** `instance_type`, `ssh_public_key`, `allowed_cidr` (the Terraform workspace is the environment — there is no `env` variable).
 
 ## 3. Ansible
 
@@ -246,12 +252,13 @@ Run: `ansible-playbook verify.yml` (gate) / `ansible-playbook verify.yml -e run_
 | Job | Runs | Key steps |
 |---|---|---|
 | `lint` | Always | `ansible-lint`, `yamllint`, `ansible-playbook --syntax-check`, `terraform fmt -check`, `terraform validate` |
-| `ci-cluster` | After `lint` | OIDC → AWS; `terraform workspace select -or-create ci`; apply; add runner IP to SG; `ansible-playbook site.yml`; run again for idempotency; `pytest` |
+| `ci-cluster` | After `lint` | assume AWS creds (access-key secret); `terraform workspace select -or-create ci`; apply (sets `allowed_cidr` to the runner IP); `ansible-playbook site.yml`; run again for idempotency; `ansible-playbook verify.yml` |
 | `ci-teardown` | `if: always()` after `ci-cluster` | `terraform destroy` in `ci` workspace |
-| `prod` | After `ci-cluster` passes; `environment: production` (approval) | Same steps in `prod` workspace, no destroy; `pytest` against production |
+| `prod` | After `ci-cluster` passes; `environment: production` (approval) | Same steps in `prod` workspace, no destroy; `verify.yml` against production |
 
-**AWS access:** one IAM role trusted for this repo via GitHub OIDC, scoped to
-EC2/VPC and the state bucket.
+**AWS access:** currently an access-key secret in GitHub (the account's SCP blocks the
+OIDC provider). The intended setup is an OIDC-federated IAM role (`terraform/bootstrap/`)
+trusted for this repo, scoped to EC2/VPC and the state bucket.
 
 ## 6. Failure handling
 
@@ -264,7 +271,7 @@ EC2/VPC and the state bucket.
 
 ## 7. Build order (one day)
 
-1. AWS account, billing alert, state bucket, OIDC role; repo + local tools.
+1. AWS account, billing alert, state bucket, CI credentials (access-key secret; OIDC is the intended setup); repo + local tools.
 2. Terraform: network + instances, applied by hand.
 3. `galera` role against those instances until the cluster forms and is idempotent.
 4. `haproxy` role.
